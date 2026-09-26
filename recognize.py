@@ -1,20 +1,30 @@
 import os
 import cv2
 import face_recognition
-import pandas as pd
+import psycopg
 from datetime import datetime
+from zoneinfo import ZoneInfo
+from export_attendance import export_attendance
+from dotenv import load_dotenv
+
+load_dotenv()
 
 IMAGE_PATH = "images"
-ATTENDANCE_FILE = "attendance/attendance.csv"
+
 
 
 def load_known_faces():
     known_encodings = []
-    known_names = []
+    known_students = []
 
     for folder_name in os.listdir(IMAGE_PATH):
         folder_path = os.path.join(IMAGE_PATH, folder_name)
         if not os.path.isdir(folder_path):
+            continue
+        try:
+            _,student_id = folder_name.rsplit("_", 1)  
+        except ValueError:
+            print(f"Skipping folder '{folder_name}' as it does not follow the expected naming convention.")
             continue
 
         for image_name in os.listdir(folder_path):
@@ -24,31 +34,60 @@ def load_known_faces():
 
             if encodings:
                 known_encodings.append(encodings[0])
-                known_names.append(folder_name)
+                name = get_student_name(student_id)  # Fetch the name from the database
+                known_students.append((student_id, name))
 
-    return known_encodings, known_names
+    return known_encodings, known_students
 
 
-def mark_attendance(name):
-    now = datetime.now()
-    current_time = now.strftime("%H:%M:%S")
+def get_student_name(student_id):
+    connection = psycopg.connect(
+    host=os.getenv("DB_HOST"),
+    dbname=os.getenv("DB_NAME"),
+    user=os.getenv("DB_USER"),
+    password=os.getenv("DB_PASSWORD")
+)
 
-    os.makedirs(os.path.dirname(ATTENDANCE_FILE), exist_ok=True)
+    cursor = connection.cursor()
+    cursor.execute('SELECT "NAME" FROM students WHERE student_id = %s', (student_id,))
+    result = cursor.fetchone()
+    cursor.close()
+    connection.close()
 
-    if os.path.exists(ATTENDANCE_FILE):
-        df = pd.read_csv(ATTENDANCE_FILE)
+    if result:
+        return result[0]
+    return "Unknown"
+
+
+def mark_attendance(student_id, name):
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    current_time = now.time().replace(tzinfo=None)  # Remove timezone info for database storage
+    current_date = now.date()
+    connection = psycopg.connect(
+        host=os.getenv("DB_HOST"),
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD")
+    )
+
+    cursor = connection.cursor()
+    cursor.execute('SELECT attendance_id FROM attendance WHERE student_id = %s AND attendance_date = %s', (student_id, current_date))
+    already_marked = cursor.fetchone()
+    if already_marked:
+        print(f"Attendance already marked for {name} on {current_date}.")
     else:
-        df = pd.DataFrame(columns=["Name", "Time"])
+        cursor.execute('INSERT INTO attendance (student_id, attendance_date, attendance_time,status) VALUES (%s, %s, %s, %s)', (student_id, current_date, current_time,"Present"))
+        connection.commit()
+        print(f"Attendance marked for {name}_{student_id} at {current_time} on {current_date}.")
+        export_attendance()  # Call the export function after marking attendance
 
-    if name not in df["Name"].values:
-        new_row = {"Name": name, "Time": current_time}
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        df.to_csv(ATTENDANCE_FILE, index=False)
-        print("Attendance saved:", name)
+    cursor.close()
+    connection.close()
+
 
 
 def main():
-    known_encodings, known_names = load_known_faces()
+    known_encodings, known_students = load_known_faces()
 
     if not known_encodings:
         print("No known faces found.")
@@ -74,10 +113,10 @@ def main():
 
             if True in matches:
                 index = matches.index(True)
-                name = known_names[index]
-                if name not in marked:
-                    mark_attendance(name)
-                    marked.append(name)
+                student_id, name = known_students[index]
+                if student_id not in marked:
+                    mark_attendance(student_id, name)
+                    marked.append(student_id)
             else:
                 name = "Unknown"
 

@@ -1,10 +1,32 @@
 import cv2
 import os
+import psycopg
+from dotenv import load_dotenv
+
+load_dotenv()
 
 cap=cv2.VideoCapture(0)
 
 student_id=input("Enter Student ID: ")
 name=input("Enter Name :")
+
+#database connection
+student_id=int(student_id)
+connection = psycopg.connect(
+    host=os.getenv("DB_HOST"),
+    dbname=os.getenv("DB_NAME"),
+    user=os.getenv("DB_USER"),
+    password=os.getenv("DB_PASSWORD")
+)
+
+cursor=connection.cursor()
+cursor.execute('INSERT INTO students (student_id,"NAME") VALUES (%s, %s)', (student_id, name))
+connection.commit()
+cursor.close()
+connection.close()
+print("Student added to the database successfully.")
+
+
 
 folder_path=f"images/{name}_{student_id}"
 os.makedirs(folder_path,exist_ok=True)

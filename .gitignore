@@ -1,0 +1,7 @@
+.env
+attendance.xlsx
+*.xlsx
+images/
+__pycache__/
+*.pyc
+.vscode/
